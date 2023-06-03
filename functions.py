@@ -17,7 +17,7 @@ NAME = ['M1_fall.csv',
 
 COLUMNS = ['Time (s)', 'Fz (N)', 'AI7 (V)', 'AI8 (V)']
 DATA = {}
-FILTERA, FILTERB = signal.butter(4, 15, fs=100, btype='low', analog=False)
+FILTERA, FILTERB = signal.butter(4, 15, fs=200, btype='low', analog=False)
 
 #### Début du code
 def start():
@@ -26,7 +26,7 @@ def start():
 #### On import les données
 def Import_Data():
     for name in NAME:
-        DATA[name] = pd.read_csv(name)[COLUMNS]
+        DATA[name] = pd.read_csv(name)[COLUMNS].dropna()
         DATA[name][COLUMNS[1]] = - DATA[name][COLUMNS[1]]
 
 #### On montre le signal
@@ -54,7 +54,8 @@ def Show_Signal(x, y):
 ### Ces deux fonctions resample le signal
 def Resample_All_Signal(target_fr):
     for name in NAME:
-        DATA[name] = Resample_Signal(DATA[name], target_fr)
+        if DATA[name][COLUMNS[0]].iloc[1] != 1/target_fr:
+            DATA[name] = Resample_Signal(DATA[name], target_fr)
 
 def Resample_Signal(DF_to_resample, target_fr):
     column = COLUMNS[0]
@@ -75,7 +76,6 @@ def Filter_All_Signal():
         DATA[name][COLUMNS[1]] = Filter_Signal(DATA[name][COLUMNS[1]])
 
 def Filter_Signal(sery):
-    filtered = sery
     filtered = signal.filtfilt(FILTERA, FILTERB, sery)
     return filtered
 
@@ -83,12 +83,12 @@ def Filter_Signal(sery):
 ### Ici, on cherche les trigger
 def Search_Trigger():
     df_arduino = DATA[NAME[7]].iloc[:,:]
-    fr = 1/100
+    echantillonnage = 1/200
     df_arduino = arduino_ping_bool(df_arduino, 'AI7 (V)', 'AI7-2')
     df_arduino['A7'] = 0
     df_arduino['A7'] = arduino_ping(df_arduino.loc[df_arduino[df_arduino['AI7-2']].index, 'A7'])
     df_arduino['A7'] = np.where(df_arduino['A7'].isna(), 0, df_arduino['A7'])
-    df_arduino['Code-7'] = arduino_ping_translation(df_arduino['A7'][df_arduino['A7'] != 0], fr)
+    df_arduino['Code-7'] = arduino_ping_translation(df_arduino['A7'][df_arduino['A7'] != 0], echantillonnage)
     df_arduino['Code-7'] = np.where(df_arduino['Code-7'].isna(), '', df_arduino['Code-7'])
 
     df_arduino['dT'] = df_arduino['Time (s)'][df_arduino['A7'] != 0].diff()
@@ -98,14 +98,14 @@ def Search_Trigger():
         tableau[index] = i
     
     df = pd.DataFrame()
-    array = np.arange(0,1,0.01)
+    array = np.arange(0,1,echantillonnage)
     df['Time (s)'] = array
     name = 'name'
     i = 0
-    for index in tableau.keys():        
-        if tableau[index]['Time (s)'] >= 0.200:
-            index_start = index - 20
-            index_end = index  + 80
+    for index in tableau.keys():   
+        if tableau[index]['Time (s)'] >= 0.100:
+            index_start = index - int((200/echantillonnage)/1000)
+            index_end = index  + int((800/echantillonnage)/1000)
             df[name + str(i)] = df_arduino['Fz (N)'].iloc[index_start:index_end+1].copy().reset_index(drop = True)
             i += 1
 
@@ -191,15 +191,17 @@ def Show_Trigger(a):
     
 def Create_Trigger(df):
     i = len(df.columns) - 1
+    fr = 200
+    length = int(fr)
     dictionnary = {}
     for name in NAME[0:len(NAME)-1]:
         dataF = DATA[name].loc[:,['Time (s)','Fz (N)']]
         loop = True
         index = 0
         while loop:
-            if (index + 100) in dataF.index:
-                dictionnary['name'+str(i)] = dataF.loc[range(index,index + 100),'Fz (N)'].reset_index(drop=True)
-                index += 100
+            if (index+length) in dataF.index:
+                dictionnary['name'+str(i)] = dataF.loc[range(index, index+length),'Fz (N)'].reset_index(drop=True)
+                index += length
                 i += 1
             else:
                 loop = False
@@ -207,9 +209,12 @@ def Create_Trigger(df):
     return df
 
 def Baseline(df):
+    fr = 200
+    index_start = 0
+    index_end = int(200*fr/1000)
     DFBL = df.copy(deep=True)
     for name in DFBL.iloc[:,range(1,len(DFBL.columns))]:
-        moyenne = DFBL[name][0:20].mean()
+        moyenne = DFBL[name][index_start:index_end].mean()
         DFBL[name] = DFBL[name] - moyenne
     return DFBL
 
@@ -228,11 +233,13 @@ def Drop_Pics_BL(df):
 def Drop_Pics_Min_Max(df):
     DFDP = df.copy(deep=True)
     columnsToDrop = []
+    fr = 200
+    length = int(100*fr/1000)
     for name in DFDP.iloc[:,range(1,len(DFDP.columns))]:
         for index, Force in enumerate(DFDP[name]):
             # print(name, len(DFBL[name]), index, Force)
             indexMin = index
-            indexMax = min(index+10, len(DFDP[name]))
+            indexMax = min(index+length, len(DFDP[name]))
             MaxMinusMin = abs(DFDP[name][indexMin:indexMax].max() - DFDP[name][indexMin:indexMax].min())
             conditionnalValue = MaxMinusMin > 0.1
             if conditionnalValue:
